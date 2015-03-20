@@ -1,0 +1,559 @@
+module	Reset_Delay(iCLK,oRESET);
+input		iCLK;
+output reg	oRESET;
+reg	[19:0]	Cont;
+
+always@(posedge iCLK)
+begin
+	oRESET	<=	1'b1;
+	if(Cont!=200'hFFFFF)
+	begin
+		Cont	<=	Cont+1'b1;
+		oRESET	<=	1'b0;
+	end
+	else
+	oRESET	<=	1'b1;
+end
+
+endmodule
+
+
+module VGAController(
+//	Clock Input
+  input CLOCK_50,	//	50 MHz
+  input CLOCK_27,     //      27 MHz
+//	Push Button
+ inout [35:0] GPIO_0,GPIO_1,	//	GPIO Connections
+//	TV Decoder
+//TD_DATA,    	//	TV Decoder Data bus 8 bits
+//TD_HS,		//	TV Decoder H_SYNC
+//TD_VS,		//	TV Decoder V_SYNC
+  output TD_RESET,	//	TV Decoder Reset
+// VGA
+  output VGA_CLK,   						//	VGA Clock
+  output VGA_HS,							//	VGA H_SYNC
+  output VGA_VS,							//	VGA V_SYNC
+  output VGA_BLANK,						//	VGA BLANK
+  output VGA_SYNC,						//	VGA SYNC
+  output [9:0] VGA_R,   						//	VGA Red[9:0]
+  output [9:0] VGA_G,	 						//	VGA Green[9:0]
+  output [9:0] VGA_B,  						//	VGA Blue[9:0]
+  input [30000:0] snake_body 
+);
+
+//	All inout port turn to tri-state
+assign	GPIO_0		=	36'hzzzzzzzzz;
+assign	GPIO_1		=	36'hzzzzzzzzz;
+
+// reset delay gives some time for peripherals to initialize
+wire DLY_RST;
+Reset_Delay r0(	.iCLK(CLOCK_50),.oRESET(DLY_RST) );
+
+
+// Turn off green leds
+assign LEDG = 8'h00;
+
+//wire [6:0] blank = 7'b111_1111;
+
+wire		VGA_CTRL_CLK;
+wire		AUD_CTRL_CLK;
+wire [9:0]	mVGA_R;
+wire [9:0]	mVGA_G;
+wire [9:0]	mVGA_B;
+wire [9:0]	mCoord_X;
+wire [9:0]	mCoord_Y;
+
+assign	TD_RESET = 1'b1; // Enable 27 MHz
+
+VGA_Audio_PLL 	p1 (	
+	.areset(~DLY_RST),
+	.inclk0(CLOCK_27),
+	.c0(VGA_CTRL_CLK),
+	.c1(AUD_CTRL_CLK),
+	.c2(VGA_CLK)
+);
+
+wire [9:0] r, g, b;
+
+render c1(mCoord_X, mCoord_Y, r, g, b, snake_body[30000:0]);
+
+assign mVGA_R = (r);
+assign mVGA_G = (g);
+assign mVGA_B = (b); 
+
+vga_sync u1(
+   .iCLK(VGA_CTRL_CLK),
+   .iRST_N(DLY_RST),	
+   .iRed(mVGA_R),
+   .iGreen(mVGA_G),
+   .iBlue(mVGA_B),
+   // pixel coordinates
+   .px(mCoord_X),
+   .py(mCoord_Y),
+   // VGA Side
+   .VGA_R(VGA_R),
+   .VGA_G(VGA_G),
+   .VGA_B(VGA_B),
+   .VGA_H_SYNC(VGA_HS),
+   .VGA_V_SYNC(VGA_VS),
+   .VGA_SYNC(VGA_SYNC),
+   .VGA_BLANK(VGA_BLANK)
+);
+
+
+endmodule
+module vga_sync(
+   input iCLK, // 25 MHz clock
+   input iRST_N,
+   input [9:0] iRed,
+   input [9:0] iGreen,
+   input [9:0] iBlue,
+   // pixel coordinates
+   output [9:0] px,
+   output [9:0] py,
+   // VGA Side
+   output  [9:0] VGA_R,
+   output  [9:0] VGA_G,
+   output  [9:0] VGA_B,
+   output reg VGA_H_SYNC,
+   output reg VGA_V_SYNC,
+   output VGA_SYNC,
+   output VGA_BLANK
+);
+
+assign	VGA_BLANK	=	VGA_H_SYNC & VGA_V_SYNC;
+assign	VGA_SYNC	=	1'b0;
+
+reg [9:0] h_count, v_count;
+assign px = h_count;
+assign py = v_count;
+
+
+// Horizontal sync
+
+/* Generate Horizontal and Vertical Timing Signals for Video Signal
+* h_count counts pixels (640 + extra time for sync signals)
+* 
+*  horiz_sync  ------------------------------------__________--------
+*  h_count       0                640             659       755    799
+*/
+parameter H_SYNC_TOTAL = 800;
+parameter H_PIXELS =     640;
+parameter H_SYNC_START = 659;
+parameter H_SYNC_WIDTH =  96;
+
+always@(posedge iCLK or negedge iRST_N)
+begin
+   if(!iRST_N)
+   begin
+      h_count <= 10'h000;
+      VGA_H_SYNC <= 1'b0;
+   end
+   else
+   begin
+      // H_Sync Counter
+      if (h_count < H_SYNC_TOTAL-1) h_count <= h_count + 1'b1;
+      else h_count <= 10'h0000;
+
+      if (h_count >= H_SYNC_START && 
+	h_count < H_SYNC_START+H_SYNC_WIDTH) VGA_H_SYNC = 1'b0;
+      else VGA_H_SYNC <= 1'b1;
+   end
+end
+/*  
+*  vertical_sync      -----------------------------------------------_______------------
+*  v_count             0                                      480    493-494          524
+*/
+parameter V_SYNC_TOTAL = 525;
+parameter V_PIXELS     = 480;
+parameter V_SYNC_START = 493;
+parameter V_SYNC_WIDTH =   2;
+parameter H_START = 699;
+
+always @(posedge iCLK or negedge iRST_N)
+begin
+   if (!iRST_N)
+   begin
+      v_count <= 10'h0000;
+      VGA_V_SYNC <= 1'b0;
+   end
+   else if (h_count == H_START)
+   begin
+      // V_Sync Counter
+      if (v_count < V_SYNC_TOTAL-1) v_count <= v_count + 1'b1;
+      else v_count <= 10'h0000;
+
+      if (v_count >= V_SYNC_START && 
+		v_count < V_SYNC_START+V_SYNC_WIDTH) VGA_V_SYNC = 1'b0;
+      else VGA_V_SYNC <= 1'b1;
+   end
+end
+   
+
+// Put all video signals through DFFs to elminate any delays that cause a blurry image
+
+wire video_h_on = (h_count<H_PIXELS);
+wire video_v_on = (v_count<V_PIXELS);
+wire video_on = video_h_on & video_v_on;
+
+assign VGA_R = (video_on? iRed: 10'h000);
+assign VGA_G = (video_on? iGreen: 10'h000);
+assign VGA_B = (video_on? iBlue: 10'h000);
+
+   
+endmodule
+
+
+// megafunction wizard: %ALTPLL%
+// GENERATION: STANDARD
+// VERSION: WM1.0
+// MODULE: altpll 
+
+// ============================================================
+// File Name: VGA_Audio_PLL.v
+// Megafunction Name(s):
+// 			altpll
+//
+// Simulation Library Files(s):
+// 			altera_mf
+// ============================================================
+// ************************************************************
+// THIS IS A WIZARD-GENERATED FILE. DO NOT EDIT THIS FILE!
+//
+// 7.2 Build 175 11/20/2007 SP 1 SJ Web Edition
+// ************************************************************
+
+
+//Copyright (C) 1991-2007 Altera Corporation
+//Your use of Altera Corporation's design tools, logic functions 
+//and other software and tools, and its AMPP partner logic 
+//functions, and any output files from any of the foregoing 
+//(including device programming or simulation files), and any 
+//associated documentation or information are expressly subject 
+//to the terms and conditions of the Altera Program License 
+//Subscription Agreement, Altera MegaCore Function License 
+//Agreement, or other applicable license agreement, including, 
+//without limitation, that your use is for the sole purpose of 
+//programming logic devices manufactured by Altera and sold by 
+//Altera or its authorized distributors.  Please refer to the 
+//applicable agreement for further details.
+
+
+// synopsys translate_off
+`timescale 1 ps / 1 ps
+// synopsys translate_on
+module VGA_Audio_PLL (
+	areset,
+	inclk0,
+	c0,
+	c1,
+	c2);
+
+	input	  areset;
+	input	  inclk0;
+	output	  c0;
+	output	  c1;
+	output	  c2;
+
+	wire [5:0] sub_wire0;
+	wire [0:0] sub_wire6 = 1'h0;
+	wire [2:2] sub_wire3 = sub_wire0[2:2];
+	wire [1:1] sub_wire2 = sub_wire0[1:1];
+	wire [0:0] sub_wire1 = sub_wire0[0:0];
+	wire  c0 = sub_wire1;
+	wire  c1 = sub_wire2;
+	wire  c2 = sub_wire3;
+	wire  sub_wire4 = inclk0;
+	wire [1:0] sub_wire5 = {sub_wire6, sub_wire4};
+
+	altpll	altpll_component (
+				.inclk (sub_wire5),
+				.areset (areset),
+				.clk (sub_wire0),
+				.activeclock (),
+				.clkbad (),
+				.clkena ({6{1'b1}}),
+				.clkloss (),
+				.clkswitch (1'b0),
+				.configupdate (1'b0),
+				.enable0 (),
+				.enable1 (),
+				.extclk (),
+				.extclkena ({4{1'b1}}),
+				.fbin (1'b1),
+				.fbmimicbidir (),
+				.fbout (),
+				.locked (),
+				.pfdena (1'b1),
+				.phasecounterselect ({4{1'b1}}),
+				.phasedone (),
+				.phasestep (1'b1),
+				.phaseupdown (1'b1),
+				.pllena (1'b1),
+				.scanaclr (1'b0),
+				.scanclk (1'b0),
+				.scanclkena (1'b1),
+				.scandata (1'b0),
+				.scandataout (),
+				.scandone (),
+				.scanread (1'b0),
+				.scanwrite (1'b0),
+				.sclkout0 (),
+				.sclkout1 (),
+				.vcooverrange (),
+				.vcounderrange ());
+	defparam
+		altpll_component.clk0_divide_by = 15,
+		altpll_component.clk0_duty_cycle = 50,
+		altpll_component.clk0_multiply_by = 14,
+		altpll_component.clk0_phase_shift = "0",
+		altpll_component.clk1_divide_by = 3,
+		altpll_component.clk1_duty_cycle = 50,
+		altpll_component.clk1_multiply_by = 2,
+		altpll_component.clk1_phase_shift = "0",
+		altpll_component.clk2_divide_by = 15,
+		altpll_component.clk2_duty_cycle = 50,
+		altpll_component.clk2_multiply_by = 14,
+		altpll_component.clk2_phase_shift = "-9921",
+		altpll_component.compensate_clock = "CLK0",
+		altpll_component.inclk0_input_frequency = 37037,
+		altpll_component.intended_device_family = "Cyclone II",
+		altpll_component.lpm_type = "altpll",
+		altpll_component.operation_mode = "NORMAL",
+		altpll_component.port_activeclock = "PORT_UNUSED",
+		altpll_component.port_areset = "PORT_USED",
+		altpll_component.port_clkbad0 = "PORT_UNUSED",
+		altpll_component.port_clkbad1 = "PORT_UNUSED",
+		altpll_component.port_clkloss = "PORT_UNUSED",
+		altpll_component.port_clkswitch = "PORT_UNUSED",
+		altpll_component.port_configupdate = "PORT_UNUSED",
+		altpll_component.port_fbin = "PORT_UNUSED",
+		altpll_component.port_inclk0 = "PORT_USED",
+		altpll_component.port_inclk1 = "PORT_UNUSED",
+		altpll_component.port_locked = "PORT_UNUSED",
+		altpll_component.port_pfdena = "PORT_UNUSED",
+		altpll_component.port_phasecounterselect = "PORT_UNUSED",
+		altpll_component.port_phasedone = "PORT_UNUSED",
+		altpll_component.port_phasestep = "PORT_UNUSED",
+		altpll_component.port_phaseupdown = "PORT_UNUSED",
+		altpll_component.port_pllena = "PORT_UNUSED",
+		altpll_component.port_scanaclr = "PORT_UNUSED",
+		altpll_component.port_scanclk = "PORT_UNUSED",
+		altpll_component.port_scanclkena = "PORT_UNUSED",
+		altpll_component.port_scandata = "PORT_UNUSED",
+		altpll_component.port_scandataout = "PORT_UNUSED",
+		altpll_component.port_scandone = "PORT_UNUSED",
+		altpll_component.port_scanread = "PORT_UNUSED",
+		altpll_component.port_scanwrite = "PORT_UNUSED",
+		altpll_component.port_clk0 = "PORT_USED",
+		altpll_component.port_clk1 = "PORT_USED",
+		altpll_component.port_clk2 = "PORT_USED",
+		altpll_component.port_clk3 = "PORT_UNUSED",
+		altpll_component.port_clk4 = "PORT_UNUSED",
+		altpll_component.port_clk5 = "PORT_UNUSED",
+		altpll_component.port_clkena0 = "PORT_UNUSED",
+		altpll_component.port_clkena1 = "PORT_UNUSED",
+		altpll_component.port_clkena2 = "PORT_UNUSED",
+		altpll_component.port_clkena3 = "PORT_UNUSED",
+		altpll_component.port_clkena4 = "PORT_UNUSED",
+		altpll_component.port_clkena5 = "PORT_UNUSED",
+		altpll_component.port_extclk0 = "PORT_UNUSED",
+		altpll_component.port_extclk1 = "PORT_UNUSED",
+		altpll_component.port_extclk2 = "PORT_UNUSED",
+		altpll_component.port_extclk3 = "PORT_UNUSED";
+
+
+endmodule
+
+// ============================================================
+// CNX file retrieval info
+// ============================================================
+// Retrieval info: PRIVATE: ACTIVECLK_CHECK STRING "0"
+// Retrieval info: PRIVATE: BANDWIDTH STRING "1.000"
+// Retrieval info: PRIVATE: BANDWIDTH_FEATURE_ENABLED STRING "0"
+// Retrieval info: PRIVATE: BANDWIDTH_FREQ_UNIT STRING "MHz"
+// Retrieval info: PRIVATE: BANDWIDTH_PRESET STRING "Low"
+// Retrieval info: PRIVATE: BANDWIDTH_USE_AUTO STRING "1"
+// Retrieval info: PRIVATE: BANDWIDTH_USE_CUSTOM STRING "0"
+// Retrieval info: PRIVATE: BANDWIDTH_USE_PRESET STRING "0"
+// Retrieval info: PRIVATE: CLKBAD_SWITCHOVER_CHECK STRING "0"
+// Retrieval info: PRIVATE: CLKLOSS_CHECK STRING "0"
+// Retrieval info: PRIVATE: CLKSWITCH_CHECK STRING "1"
+// Retrieval info: PRIVATE: CNX_NO_COMPENSATE_RADIO STRING "0"
+// Retrieval info: PRIVATE: CREATE_CLKBAD_CHECK STRING "0"
+// Retrieval info: PRIVATE: CREATE_INCLK1_CHECK STRING "0"
+// Retrieval info: PRIVATE: CUR_DEDICATED_CLK STRING "c0"
+// Retrieval info: PRIVATE: CUR_FBIN_CLK STRING "e0"
+// Retrieval info: PRIVATE: DEVICE_SPEED_GRADE STRING "Any"
+// Retrieval info: PRIVATE: DIV_FACTOR0 NUMERIC "1"
+// Retrieval info: PRIVATE: DIV_FACTOR1 NUMERIC "6"
+// Retrieval info: PRIVATE: DIV_FACTOR2 NUMERIC "1"
+// Retrieval info: PRIVATE: DUTY_CYCLE0 STRING "50.00000000"
+// Retrieval info: PRIVATE: DUTY_CYCLE1 STRING "50.00000000"
+// Retrieval info: PRIVATE: DUTY_CYCLE2 STRING "50.00000000"
+// Retrieval info: PRIVATE: EXPLICIT_SWITCHOVER_COUNTER STRING "0"
+// Retrieval info: PRIVATE: EXT_FEEDBACK_RADIO STRING "0"
+// Retrieval info: PRIVATE: GLOCKED_COUNTER_EDIT_CHANGED STRING "1"
+// Retrieval info: PRIVATE: GLOCKED_FEATURE_ENABLED STRING "1"
+// Retrieval info: PRIVATE: GLOCKED_MODE_CHECK STRING "0"
+// Retrieval info: PRIVATE: GLOCK_COUNTER_EDIT NUMERIC "1048575"
+// Retrieval info: PRIVATE: HAS_MANUAL_SWITCHOVER STRING "1"
+// Retrieval info: PRIVATE: INCLK0_FREQ_EDIT STRING "27.000"
+// Retrieval info: PRIVATE: INCLK0_FREQ_UNIT_COMBO STRING "MHz"
+// Retrieval info: PRIVATE: INCLK1_FREQ_EDIT STRING "27.000"
+// Retrieval info: PRIVATE: INCLK1_FREQ_EDIT_CHANGED STRING "1"
+// Retrieval info: PRIVATE: INCLK1_FREQ_UNIT_CHANGED STRING "1"
+// Retrieval info: PRIVATE: INCLK1_FREQ_UNIT_COMBO STRING "MHz"
+// Retrieval info: PRIVATE: INTENDED_DEVICE_FAMILY STRING "Cyclone II"
+// Retrieval info: PRIVATE: INT_FEEDBACK__MODE_RADIO STRING "1"
+// Retrieval info: PRIVATE: LOCKED_OUTPUT_CHECK STRING "0"
+// Retrieval info: PRIVATE: LONG_SCAN_RADIO STRING "1"
+// Retrieval info: PRIVATE: LVDS_MODE_DATA_RATE STRING "Not Available"
+// Retrieval info: PRIVATE: LVDS_MODE_DATA_RATE_DIRTY NUMERIC "0"
+// Retrieval info: PRIVATE: LVDS_PHASE_SHIFT_UNIT0 STRING "deg"
+// Retrieval info: PRIVATE: LVDS_PHASE_SHIFT_UNIT1 STRING "deg"
+// Retrieval info: PRIVATE: LVDS_PHASE_SHIFT_UNIT2 STRING "ps"
+// Retrieval info: PRIVATE: MIRROR_CLK0 STRING "0"
+// Retrieval info: PRIVATE: MIRROR_CLK1 STRING "0"
+// Retrieval info: PRIVATE: MIRROR_CLK2 STRING "0"
+// Retrieval info: PRIVATE: MULT_FACTOR0 NUMERIC "1"
+// Retrieval info: PRIVATE: MULT_FACTOR1 NUMERIC "5"
+// Retrieval info: PRIVATE: MULT_FACTOR2 NUMERIC "1"
+// Retrieval info: PRIVATE: NORMAL_MODE_RADIO STRING "1"
+// Retrieval info: PRIVATE: OUTPUT_FREQ0 STRING "25.20000000"
+// Retrieval info: PRIVATE: OUTPUT_FREQ1 STRING "18.00000000"
+// Retrieval info: PRIVATE: OUTPUT_FREQ2 STRING "25.20000000"
+// Retrieval info: PRIVATE: OUTPUT_FREQ_MODE0 STRING "1"
+// Retrieval info: PRIVATE: OUTPUT_FREQ_MODE1 STRING "1"
+// Retrieval info: PRIVATE: OUTPUT_FREQ_MODE2 STRING "1"
+// Retrieval info: PRIVATE: OUTPUT_FREQ_UNIT0 STRING "MHz"
+// Retrieval info: PRIVATE: OUTPUT_FREQ_UNIT1 STRING "MHz"
+// Retrieval info: PRIVATE: OUTPUT_FREQ_UNIT2 STRING "MHz"
+// Retrieval info: PRIVATE: PHASE_RECONFIG_FEATURE_ENABLED STRING "0"
+// Retrieval info: PRIVATE: PHASE_RECONFIG_INPUTS_CHECK STRING "0"
+// Retrieval info: PRIVATE: PHASE_SHIFT0 STRING "0.00000000"
+// Retrieval info: PRIVATE: PHASE_SHIFT1 STRING "0.00000000"
+// Retrieval info: PRIVATE: PHASE_SHIFT2 STRING "-90.00000000"
+// Retrieval info: PRIVATE: PHASE_SHIFT_STEP_ENABLED_CHECK STRING "0"
+// Retrieval info: PRIVATE: PHASE_SHIFT_UNIT0 STRING "deg"
+// Retrieval info: PRIVATE: PHASE_SHIFT_UNIT1 STRING "deg"
+// Retrieval info: PRIVATE: PHASE_SHIFT_UNIT2 STRING "deg"
+// Retrieval info: PRIVATE: PLL_ADVANCED_PARAM_CHECK STRING "0"
+// Retrieval info: PRIVATE: PLL_ARESET_CHECK STRING "1"
+// Retrieval info: PRIVATE: PLL_AUTOPLL_CHECK NUMERIC "1"
+// Retrieval info: PRIVATE: PLL_ENA_CHECK STRING "0"
+// Retrieval info: PRIVATE: PLL_ENHPLL_CHECK NUMERIC "0"
+// Retrieval info: PRIVATE: PLL_FASTPLL_CHECK NUMERIC "0"
+// Retrieval info: PRIVATE: PLL_FBMIMIC_CHECK STRING "0"
+// Retrieval info: PRIVATE: PLL_LVDS_PLL_CHECK NUMERIC "0"
+// Retrieval info: PRIVATE: PLL_PFDENA_CHECK STRING "0"
+// Retrieval info: PRIVATE: PLL_TARGET_HARCOPY_CHECK NUMERIC "0"
+// Retrieval info: PRIVATE: PRIMARY_CLK_COMBO STRING "inclk0"
+// Retrieval info: PRIVATE: RECONFIG_FILE STRING "VGA_Audio_PLL.mif"
+// Retrieval info: PRIVATE: SACN_INPUTS_CHECK STRING "0"
+// Retrieval info: PRIVATE: SCAN_FEATURE_ENABLED STRING "0"
+// Retrieval info: PRIVATE: SELF_RESET_LOCK_LOSS STRING "0"
+// Retrieval info: PRIVATE: SHORT_SCAN_RADIO STRING "0"
+// Retrieval info: PRIVATE: SPREAD_FEATURE_ENABLED STRING "0"
+// Retrieval info: PRIVATE: SPREAD_FREQ STRING "50.000"
+// Retrieval info: PRIVATE: SPREAD_FREQ_UNIT STRING "KHz"
+// Retrieval info: PRIVATE: SPREAD_PERCENT STRING "0.500"
+// Retrieval info: PRIVATE: SPREAD_USE STRING "0"
+// Retrieval info: PRIVATE: SRC_SYNCH_COMP_RADIO STRING "0"
+// Retrieval info: PRIVATE: STICKY_CLK0 STRING "1"
+// Retrieval info: PRIVATE: STICKY_CLK1 STRING "1"
+// Retrieval info: PRIVATE: STICKY_CLK2 STRING "1"
+// Retrieval info: PRIVATE: SWITCHOVER_COUNT_EDIT NUMERIC "1"
+// Retrieval info: PRIVATE: SWITCHOVER_FEATURE_ENABLED STRING "1"
+// Retrieval info: PRIVATE: SYNTH_WRAPPER_GEN_POSTFIX STRING "0"
+// Retrieval info: PRIVATE: USE_CLK0 STRING "1"
+// Retrieval info: PRIVATE: USE_CLK1 STRING "1"
+// Retrieval info: PRIVATE: USE_CLK2 STRING "1"
+// Retrieval info: PRIVATE: USE_CLKENA0 STRING "0"
+// Retrieval info: PRIVATE: USE_CLKENA1 STRING "0"
+// Retrieval info: PRIVATE: USE_CLKENA2 STRING "0"
+// Retrieval info: PRIVATE: USE_MIL_SPEED_GRADE NUMERIC "0"
+// Retrieval info: PRIVATE: ZERO_DELAY_RADIO STRING "0"
+// Retrieval info: LIBRARY: altera_mf altera_mf.altera_mf_components.all
+// Retrieval info: CONSTANT: CLK0_DIVIDE_BY NUMERIC "15"
+// Retrieval info: CONSTANT: CLK0_DUTY_CYCLE NUMERIC "50"
+// Retrieval info: CONSTANT: CLK0_MULTIPLY_BY NUMERIC "14"
+// Retrieval info: CONSTANT: CLK0_PHASE_SHIFT STRING "0"
+// Retrieval info: CONSTANT: CLK1_DIVIDE_BY NUMERIC "3"
+// Retrieval info: CONSTANT: CLK1_DUTY_CYCLE NUMERIC "50"
+// Retrieval info: CONSTANT: CLK1_MULTIPLY_BY NUMERIC "2"
+// Retrieval info: CONSTANT: CLK1_PHASE_SHIFT STRING "0"
+// Retrieval info: CONSTANT: CLK2_DIVIDE_BY NUMERIC "15"
+// Retrieval info: CONSTANT: CLK2_DUTY_CYCLE NUMERIC "50"
+// Retrieval info: CONSTANT: CLK2_MULTIPLY_BY NUMERIC "14"
+// Retrieval info: CONSTANT: CLK2_PHASE_SHIFT STRING "-9921"
+// Retrieval info: CONSTANT: COMPENSATE_CLOCK STRING "CLK0"
+// Retrieval info: CONSTANT: INCLK0_INPUT_FREQUENCY NUMERIC "37037"
+// Retrieval info: CONSTANT: INTENDED_DEVICE_FAMILY STRING "Cyclone II"
+// Retrieval info: CONSTANT: LPM_TYPE STRING "altpll"
+// Retrieval info: CONSTANT: OPERATION_MODE STRING "NORMAL"
+// Retrieval info: CONSTANT: PORT_ACTIVECLOCK STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_ARESET STRING "PORT_USED"
+// Retrieval info: CONSTANT: PORT_CLKBAD0 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_CLKBAD1 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_CLKLOSS STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_CLKSWITCH STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_CONFIGUPDATE STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_FBIN STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_INCLK0 STRING "PORT_USED"
+// Retrieval info: CONSTANT: PORT_INCLK1 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_LOCKED STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_PFDENA STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_PHASECOUNTERSELECT STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_PHASEDONE STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_PHASESTEP STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_PHASEUPDOWN STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_PLLENA STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_SCANACLR STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_SCANCLK STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_SCANCLKENA STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_SCANDATA STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_SCANDATAOUT STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_SCANDONE STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_SCANREAD STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_SCANWRITE STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clk0 STRING "PORT_USED"
+// Retrieval info: CONSTANT: PORT_clk1 STRING "PORT_USED"
+// Retrieval info: CONSTANT: PORT_clk2 STRING "PORT_USED"
+// Retrieval info: CONSTANT: PORT_clk3 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clk4 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clk5 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clkena0 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clkena1 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clkena2 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clkena3 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clkena4 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_clkena5 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_extclk0 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_extclk1 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_extclk2 STRING "PORT_UNUSED"
+// Retrieval info: CONSTANT: PORT_extclk3 STRING "PORT_UNUSED"
+// Retrieval info: USED_PORT: @clk 0 0 6 0 OUTPUT_CLK_EXT VCC "@clk[5..0]"
+// Retrieval info: USED_PORT: @extclk 0 0 4 0 OUTPUT_CLK_EXT VCC "@extclk[3..0]"
+// Retrieval info: USED_PORT: areset 0 0 0 0 INPUT GND "areset"
+// Retrieval info: USED_PORT: c0 0 0 0 0 OUTPUT_CLK_EXT VCC "c0"
+// Retrieval info: USED_PORT: c1 0 0 0 0 OUTPUT_CLK_EXT VCC "c1"
+// Retrieval info: USED_PORT: c2 0 0 0 0 OUTPUT_CLK_EXT VCC "c2"
+// Retrieval info: USED_PORT: inclk0 0 0 0 0 INPUT_CLK_EXT GND "inclk0"
+// Retrieval info: CONNECT: @inclk 0 0 1 0 inclk0 0 0 0 0
+// Retrieval info: CONNECT: c0 0 0 0 0 @clk 0 0 1 0
+// Retrieval info: CONNECT: c1 0 0 0 0 @clk 0 0 1 1
+// Retrieval info: CONNECT: c2 0 0 0 0 @clk 0 0 1 2
+// Retrieval info: CONNECT: @inclk 0 0 1 1 GND 0 0 0 0
+// Retrieval info: CONNECT: @areset 0 0 0 0 areset 0 0 0 0
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL.v TRUE FALSE
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL.inc FALSE FALSE
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL.cmp FALSE FALSE
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL.bsf FALSE FALSE
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL_inst.v FALSE FALSE
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL_bb.v FALSE FALSE
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL_waveforms.html TRUE FALSE
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL_wave*.jpg FALSE FALSE
+// Retrieval info: GEN_FILE: TYPE_NORMAL VGA_Audio_PLL.ppf TRUE FALSE
+// Retrieval info: LIB_FILE: altera_mf
+
