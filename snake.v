@@ -26,6 +26,7 @@ module snake(
  
   input	PS2_DAT,
   input	PS2_CLK
+  //hello world
 );
 	
 	reg [9:0] xm = 10'd96;
