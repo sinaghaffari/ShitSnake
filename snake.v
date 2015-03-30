@@ -26,134 +26,234 @@ module snake(
  
   input	PS2_DAT,
   input	PS2_CLK
-  //hello world
 );
-	
 	reg [9:0] xm = 10'd96;
 	reg [9:0] ym = 10'd35;
+	reg [1:0] snake_direction = 2'b00;
 	wire [9:0] x = xm;
 	wire [9:0] y = ym;
 	wire [7:0] keyValue;
-	wire CLK = ~KEY[0];
-	wire [29999:0] snake_wire = snake_body;
-	reg [29999:0] snake_body;
-	reg lose;
-	assign LEDR = snake_body[11:0];
-	/*always@(posedge CLK)begin
-		case(keyValue)
-			116: //right
-				xm = xm + 9;
-			114: //down
-				ym = ym + 9;
-			107: //left
-				xm = xm - 9;
-			117: //up
-				ym = ym - 9;
-		endcase
-	end*/
-	VGAController(CLOCK_50, CLOCK_27, GPIO_0, GPIO_1, TD_RESET, VGA_CLK, VGA_HS, VGA_VS, VGA_BLANK, VGA_SYNC, VGA_R, VGA_G, VGA_B, snake_wire[30000:0]);
-	keyboardController(CLOCK_50, PS2_DAT, PS2_CLK, GPIO_0, GPIO_1, keyValue);
+	wire [29999:0] snake_body;
+	reg [5:0] new_head_x;
+	reg [5:0] new_head_y;
+	reg lose = 0;
+	wire tick;
+	reg [31:0] snake_length = 1;
+	reg [11:0] in = 12'b011001011001;
+	reg [2499:0] tail = 2499'b0;
+	wire [5:0] randx;
+	wire [5:0] randy;
+	wire [11:0] nom;
+	reg eat = 0;
+	reg [31:0] counter = 0;
+	reg [31:0] tps = 32'd15;
 	
+	DFlipFlop(tick, in, snake_body[11:0], 1);//head
 	
-	
-	//NOW WE SHALL BEGIn
-	/* snake_length_bitstring has one bit for each of the segments of our snake. If the snake is n segments long, snake_length_bitstring will consist of (n - 1) one's, followed by (2499 - n) zeroes.
-	 * This will be used to determine if the shift register should pass on the value of one segment to the next.
-	 */
-	reg [11:0] snake_length;
-	reg [5:0] new_head_x; // Represents the current x coordinate of the head of the snake.
-	reg [5:0] new_head_y; // Represents the current y coordinate of the head of the snake.
-	reg [1:0] snake_direction; // The value of the FSM that determines the snake direction. Can be a value from 00 - 11.
-	reg [1:0] dx; // Is the snake moving left or right?
-	reg [1:0] dy; // Is the snake moving up or down?
-	
-	initial begin // Initialize everything to 0.
-		snake_direction = 2'b0; // Initialize snake moving upwards.
-		snake_length = 12'b000000000001; 
-		snake_body = 30000'b0;
-		lose = 1'b0;
-		snake_body[11:0] =  12'b011001011001; // Set the current head of the snake to b the centre of the screen.
-	end
-	reg [16:0] i;
-	always@( posedge CLK ) begin
-	// Handle the last snake block.
-		snake_body[29999:29988] = 12'b0; // No matter what, the tail of our shift register will drop it's current value.
-	
-	// Handle everything other than the last and first snake block.
-		for (i = 2498; i > 0; i = i - 1) begin
-			snake_body[i * 12 + 11:i * 12] = snake_body[i*12 - 1:i*12 - 12] & (snake_length < (i - 1));
+	genvar i;
+	generate
+		for (i = 1; i < 100; i = i + 1) begin : gen_loop
+			DFlipFlop D(tick, snake_body[12*i - 1:(i-1)*12], snake_body[12*(i+1)-1: 12*i], tail[i]);
 		end
-
-	// Handle the first snake block.
-		if ( keyValue == 117 & ~snake_direction == 2'b11 ) begin // Change Up if not going Down..
+	endgenerate
+	integer k;
+	initial begin
+		tail = 25000'b0;
+		snake_length = 1;
+		in = 12'b011001011001;
+		snake_direction = 2'b00;
+		lose = 0;
+		counter = 0;
+		tps = 32'd15;
+		for (k = 0; k < 10; k = k + 1) begin
+			snake_length = snake_length + 1;
+			tail[snake_length - 1] = 1;
+		end
+	end
+	
+	always@( posedge tick ) begin
+		
+		if ( keyValue == 117 & snake_direction != 2'b11 ) begin // Change Up if not going Down.
 			snake_direction = 2'b0;
-		end else if ( keyValue == 116 & ~snake_direction == 2'b10) begin // Change Right if not going Left.
+		end else if ( keyValue == 116 & snake_direction != 2'b10 ) begin // Change Right if not going Left.
 			snake_direction = 2'b01;
-		end else if ( keyValue == 114 & ~snake_direction == 2'b00) begin // Change Down if not going Up.
+		end else if ( keyValue == 114 & snake_direction != 2'b00 ) begin // Change Down if not going Up.
 			snake_direction = 2'b11;
-		end else if ( keyValue == 107 & ~snake_direction == 2'b01) begin // Change Left if not going Right.
+		end else if ( keyValue == 107 & snake_direction != 2'b01 ) begin // Change Left if not going Right.
 			snake_direction = 2'b10;
 		end
 		
-		if (snake_direction == 2'sb0) begin // Up.
-			new_head_x = snake_body[11:6] + 0;
-			new_head_y = snake_body[5:0] - 1;
-		end else if (snake_direction == 2'sb01) begin // Right.
-			new_head_x = snake_body[11:6] + 1;
-			new_head_y = snake_body[5:0] + 0;
-		end else if (snake_direction == 2'sb11) begin // Down.
-			new_head_x = snake_body[11:6] + 0;
-			new_head_y = snake_body[5:0] + 1;
-		end else if (snake_direction == 2'sb10) begin // Left.
-			new_head_x = snake_body[11:6] - 1;
-			new_head_y = snake_body[5:0] + 0;
+		if (~lose& snake_direction == 2'sb0 ) begin // Up.
+			new_head_x = in[11:6] + 0;
+			new_head_y = in[5:0] - 1;
+		end else if ( ~lose&snake_direction == 2'sb01 ) begin // Right.
+			new_head_x = in[11:6] + 1;
+			new_head_y = in[5:0] + 0;
+		end else if ( ~lose&snake_direction == 2'sb11 ) begin // Down.
+			new_head_x = in[11:6] + 0;
+			new_head_y = in[5:0] + 1;
+		end else if ( ~lose&snake_direction == 2'sb10 ) begin // Left.
+			new_head_x = in[11:6] - 1;
+			new_head_y = in[5:0] + 0;
 		end
+		
 
-		// Check to see if you hit the borders.
-		if (new_head_x < 0 | new_head_x >= 50 | new_head_y < 0 | new_head_y >= 50) begin
+		if ((in[5:0] == 0 & snake_direction == 2'b00) | (in[5:0] == 63 & snake_direction == 2'b11) | (in[11:6] == 0 & snake_direction == 2'b10) | (in[11:6] == 63 & snake_direction == 2'b01)) begin
 			lose = 1'b1;
 		end
-
-		// Check for snake on snake collision.
-		// Having a dedicated loop for it may be a little bit inefficient. It would be nice to be able to combine it with the above loop.
-		for (i = 1; i < snake_length; i = i + 1) begin
-			if (new_head_x == snake_body[i*12+11:i*12 + 6] | new_head_y == snake_body[i*12+5:i*12]) begin
+		// Head to Tail collision detection.
+		for ( k = 1; k < 100; k = k + 1 ) begin
+			if ((k < snake_length) & (new_head_x == snake_body[(k*12)+6 +: 6]) & (new_head_y == snake_body[(k*12) +: 6])) begin
 				lose = 1'b1;
 			end
 		end
-
-		snake_body[11:6] = new_head_x;
-		snake_body[5:0] = new_head_y;
-	end	
+		
+		if ((nom[5:0] == new_head_y) & (nom[11:6] == new_head_x)) begin
+			tps = tps + 1;
+			for (k  = 0; k < 4; k = k + 1) begin
+				snake_length = snake_length + 1;
+				tail[snake_length-1] = 1;
+			end
+			eat = 1'b1;
+		end else begin
+			eat = 1'b0;
+		end
+		in[11:6] = new_head_x;
+		in[5:0] = new_head_y;
+		if(lose) begin
+			counter = counter + 1;
+			if(counter == 100)begin 
+				tail = 25000'b0;
+				snake_length = 1;
+				in = 12'b011001011001;
+				snake_direction = 2'b00;
+				lose = 0;
+				counter = 0;
+				tps = 32'd15;
+				for (k = 0; k < 10; k = k + 1) begin
+					snake_length = snake_length + 1;
+					tail[snake_length - 1] = 1;
+				end
+			end
+		
+		end
+	end
+	
+	rand_y ry(eat, nom[5:0]);
+	rand_x rx(eat, nom[11:6]);
+	assign LEDR = nom;
+	assign LEDG = lose;
+	
+	VGAController(CLOCK_50, CLOCK_27, GPIO_0, GPIO_1, TD_RESET, VGA_CLK, VGA_HS, VGA_VS, VGA_BLANK, VGA_SYNC, VGA_R, VGA_G, VGA_B, snake_body, nom, snake_length, lose);
+	keyboardController(CLOCK_50, PS2_DAT, PS2_CLK, GPIO_0, GPIO_1, keyValue);
+	
+	Tick(CLOCK_50, tick, tps);
+		
 endmodule
 
-
-module render(input [9:0] x, input [9:0] y,
-	output [9:0] red, 
-	output [9:0] green, 
-	output [9:0] blue, 
-	input [30000:0] snake_body);
-	reg [2:0] idx;
-	
-	always @(x or y)
+module Tick(Clk, tick, tps);
+	output reg tick;
+	input [31:0] tps; 
+	input Clk;
+	reg [26:0] clockcount;
+	always@(posedge Clk)
 	begin
-	//canvas
-	if (y > 15 & y < 465 & x > 95 & x < 545) begin
-		//build snake
-		//I'd make a for loop here, and check the snake length, and then render it
-		if((x >= snake_body[5:0]*9 & x <= snake_body[5:0]*9 + 9 & y >= snake_body[11:6]*9 & y <= snake_body[11:6]*9 + 9))
-			idx = 3'b101;
-		else
-			idx = 3'b111;
-	end else begin
-		idx = 3'b0;
+		clockcount <= clockcount+1;
+		if(clockcount >= 50000000/tps)
+		begin
+			tick  <= 1;
+			clockcount <= 0;
+		end
+		else	
+			tick <= 0;
 	end
+endmodule
+
+module DFlipFlop(input CLK, input [11:0] D, output reg [11:0] Q, input enable);
+	always@(posedge CLK) begin
+		if(enable)
+			Q = D;
+		else	
+			Q = 12'b0;
+	end
+endmodule
+module render(input [9:0] x,
+	input [9:0] y,
+	output [9:0] red,
+	output [9:0] green,
+	output [9:0] blue,
+	input [29999:0] snake_body,
+	input [11:0] nom,
+	input [31:0] snake_length,
+	input lose);
+	
+	reg [2:0] idx;
+	integer i;
+	
+	always @(x or y) begin
+		//canvas
+		integer found = 0;
+	
+		if (y >= 16 & y < 464 & x >= 96 & x < 544) begin
+			found = 0;
+			for (i = 0; i < 100; i = i + 1) begin
+				if ((i < snake_length) & (x >= ((snake_body[(i*12)+6 +: 6]*7) + 96)) & (x < ((snake_body[(i*12)+6 +: 6]*7) + 7 + 96)) & (y >= ((snake_body[(i*12) +: 6]*7) +16)) & (y < ((snake_body[(i*12) +: 6]*7) + 7 + 16))) begin
+						found = 1;
+				end
+			end
+			if ((x >= ((nom[11:6]*7) + 96)) & (x < ((nom[11:6]*7) + 7 + 96)) & (y >= ((nom[5:0]*7) + 16)) & (y < ((nom[5:0]*7) + 7 + 16))) begin
+				found = 2;
+			end
+			if (found == 1) begin
+				idx = 3'b100;
+			end else if (found == 2) begin
+				idx = 3'b010;
+			end else if (lose) begin
+				idx = 3'b001;
+			end else begin
+				idx = 3'b111;
+			end
+		end else begin
+			idx = 3'b0;
+		end
 	end
 assign red = (idx[0] ? 10'h3ff : 10'h0);
 assign green = (idx[1] ? 10'h3ff : 10'h0);
 assign blue = (idx[2] ? 10'h3ff : 10'h0);
 
 endmodule
+
+module rand_x(input CLK, output [5:0] rand);	
+	reg [15:0] Q;
+	reg [31:0] count = 32'b0;
+	reg temp;
+	initial
+		Q <= 16'b0111101001100101;
+	always@(posedge CLK)
+	begin
+		temp <= Q[5]^(Q[3]^(Q[2]^Q[0]));
+		Q <= Q >> 1;
+		Q[15] <= temp;
+	end
+	assign rand = Q[15:10];
+	
+endmodule
+
+module rand_y(input CLK, output [5:0] rand);	
+	reg [15:0] Q;
+	reg [31:0] count = 32'b0;
+	reg temp;
+	initial
+		Q <= 16'b0010001110001001;
+	always@(posedge CLK)
+	begin
+		temp <= Q[5]^(Q[3]^(Q[2]^Q[0]));
+		Q <= Q >> 1;
+		Q[15] <= temp;
+	end
+	assign rand = Q[15:10];
+endmodule
+
 
 module hex_7seg(hex_digit,seg);
 input [3:0] hex_digit;
@@ -181,7 +281,4 @@ case (hex_digit)
 		4'he: seg = 7'b0000110;
 		4'hf: seg = 7'b0001110;
 endcase
-
 endmodule
-
-	
